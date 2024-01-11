@@ -52,10 +52,10 @@ class WSIWorldEnv(gym.Env):
         I.e. 0 corresponds to "right", 1 to "up" etc.
         """
         self._action_to_direction = {
-            0: np.array([10, 0]),  # right
-            1: np.array([0, -10]),  # up ( cuz of openslide it's flipped )
-            2: np.array([-10, 0]),  # left
-            3: np.array([0, 10]),  # down
+            0: np.array([100, 0]),  # right
+            1: np.array([0, -100]),  # up ( cuz of openslide it's flipped )
+            2: np.array([-100, 0]),  # left
+            3: np.array([0, 100]),  # down
             4: np.int8(-1),  # zoom in
             5: np.int8(1),  # zoom out
         }

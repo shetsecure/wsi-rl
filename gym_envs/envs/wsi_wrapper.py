@@ -75,7 +75,7 @@ class WSIWrapper:
         (dx, dy) will specify where we exactly wanna zoom in. A zoom with default will just zoom on the top left part of the current view.
         """
         if self.level == 0:
-            print("Already in the max magnification, can't zoom-in more. Returning")
+            # print("Already in the max magnification, can't zoom-in more. Returning")
             return  # Not sure what would be the correct thing here, punish for trying to zoom in even tho we're at level 0 ?
 
         self.level = np.clip(self.level, 0, self.max_allowed_level - 1)
@@ -92,7 +92,7 @@ class WSIWrapper:
         (dx, dy) will specify where we exactly wanna zoom in. A zoom with default will just zoom out from the top left part of the current view.
         """
         if self.level == self.max_allowed_level:
-            print("Already in the min magnification, can't zoom-out more. Returning")
+            # print("Already in the min magnification, can't zoom-out more. Returning")
             return  # Not sure what would be the correct thing here, punish for trying to zoom in even tho we're at level 0 ?
 
         self.level = np.clip(self.level, 0, self.max_allowed_level - 1)
