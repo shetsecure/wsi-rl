@@ -4,7 +4,13 @@
 from __future__ import annotations
 from itertools import count
 
+import sys
+import yaml
+import argparse
+import datetime
+
 from tqdm import tqdm
+from pathlib import Path
 
 import torch
 import torchvision.transforms as transforms
@@ -25,28 +31,33 @@ device = torch.device("cuda")
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 
+# 7500 is the max mem_size for 32GB with patch_size=(128, 128), resize_thumbnail=(512, 512),
+# 2500 is the max mem_size (28.5) for 32GB with patch_size=(128, 128), resize_thumbnail=(768, 768),
 
-gym_params = utils.GymParams(
-    patch_size=(128, 128),
-    resize_thumbnail=(512, 512),
-    max_episode_steps=1000,
+parser = argparse.ArgumentParser(
+    description="Command-line parameters for Indexing experiments"
 )
 
-training_params = utils.TrainingParams(
-    batch_size=128,
-    gamma=0.9,
-    eps_start=1,
-    eps_end=0.01,
-    eps_decay=0.001,
-    target_update=10,
-    memory_size=5_000,
-    lr=0.001,
-    num_episodes=100,
-    saving_update=100,
+parser.add_argument(
+    "-C",
+    "--conf",
+    type=str,
+    required=True,
+    dest="confpath",
+    help="path of conf file",
 )
 
+c_time = datetime.datetime.now().strftime("%b_%d_%y %H:%M")
 
-def main():
+
+def main(argv):
+    args = parser.parse_args(argv[1:])
+
+    config = yaml.load(open(Path(args.confpath)), Loader=yaml.SafeLoader)
+
+    gym_params = utils.GymParams(**config["gym"])
+    training_params = utils.TrainingParams(**config["train"])
+
     env = gym.make(
         "gym_envs/WSIWorldEnv-v1",
         wsi_path="test.ndpi",
@@ -68,9 +79,7 @@ def main():
 
     patch_size = env.unwrapped.wsi_wrapper.patch_size
     thumbnail_size = env.unwrapped.wsi_wrapper.thumbnail_size
-    num_actions = env.action_space.n  # Number of actions in your environment
-    # model = DQN(num_actions)
-    # sum(p.numel() for p in model.parameters())
+    num_actions = env.action_space.n
 
     strategy = EpsilonGreedyStrategy(
         training_params.eps_start, training_params.eps_end, training_params.eps_decay
@@ -84,10 +93,7 @@ def main():
     target_net.eval()
     optimizer = optim.Adam(params=policy_net.parameters(), lr=training_params.lr)
 
-    writer = SummaryWriter(
-        log_dir="runs",
-        comment=f"DQN_b{training_params.batch_size}_m{training_params.memory_size}_pS{patch_size}_thS{thumbnail_size}",
-    )
+    writer = SummaryWriter()
 
     training_params_str = {
         f"training_params/{param_name}": param_value
@@ -153,11 +159,7 @@ def main():
 
                 loss_per_episode += loss.item()
 
-            # print(
-            #     f"GPU Mem used: {torch.cuda.memory_allocated() / 1e9:.2f}, Replay memory size: {len(memory)}"
-            # )
-
-            # TODO: Replace prints with loguru, and see if terminated condition really works
+            # TODO: Replace prints with loguru
 
             if terminated:
                 print(f"Episode {episode} is terminated successfully")
@@ -182,7 +184,7 @@ def main():
         if episode % training_params.saving_update == 0:
             print(f"Saving weights of the policy net")
             target_net.load_state_dict(policy_net.state_dict())
-            MODEL_PATH = f"DQN_b{training_params.batch_size}_m{training_params.memory_size}_pS{patch_size}_thS{thumbnail_size}_target_net.pt"
+            MODEL_PATH = f"DQN_b{training_params.batch_size}_m{training_params.memory_size}_pS{patch_size}_thS{thumbnail_size}_target_net_{c_time}.pt"
             torch.save(target_net.state_dict(), MODEL_PATH)
 
     env.close()
@@ -190,4 +192,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv)

@@ -20,10 +20,10 @@ class WSIWorldEnv(gym.Env):
     def __init__(
         self, wsi_path, patch_size=(256, 256), resize_thumbnail=False, render_mode=None
     ):
-        self.window_size = 1024
         self.wsi_wrapper = WSIWrapper(
             wsi_path, patch_size=patch_size, resize_thumbnail=resize_thumbnail
         )
+        self.window_size = resize_thumbnail
         self.size = self.wsi_wrapper.slide.dimensions
 
         # We have 6 actions, corresponding to "right", "up", "left", "down", zoom-in, zoom-out
@@ -102,9 +102,14 @@ class WSIWorldEnv(gym.Env):
 
         # An episode is done iff the agent has reached a view with a tissue_percentage < 0.1
         # print(self._get_info())
-        terminated = helpers.get_tissue_percentage(self.wsi_wrapper.current_view) < 0.1
+        current_tissue_percentage = helpers.get_tissue_percentage(
+            self.wsi_wrapper.current_view
+        )
+        terminated = current_tissue_percentage < 0.1
 
-        reward = -1 if not terminated else 0  # Binary sparse rewards
+        # reward = -1 if not terminated else 0  # Binary sparse rewards
+        # We need to minimazie the tissue_percenentage
+        reward = -current_tissue_percentage  # dense reward
         observation = self._get_obs()
         info = self._get_info()
 
@@ -143,7 +148,7 @@ class WSIWorldEnv(gym.Env):
         if self.window is None and self.render_mode == "human":
             pygame.init()
             pygame.display.init()
-            self.window = pygame.display.set_mode((self.window_size, self.window_size))
+            self.window = pygame.display.set_mode(self.window_size)
         if self.clock is None and self.render_mode == "human":
             self.clock = pygame.time.Clock()
 

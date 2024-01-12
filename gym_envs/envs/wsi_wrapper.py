@@ -23,6 +23,12 @@ class WSIWrapper:
     """
 
     def __init__(self, wsi_path, patch_size=(64, 64), resize_thumbnail=(512, 512)):
+        if isinstance(patch_size, int):
+            patch_size = (patch_size, patch_size)
+
+        if isinstance(resize_thumbnail, int):
+            resize_thumbnail = (resize_thumbnail, resize_thumbnail)
+
         self.slide = openslide.open_slide(wsi_path)
 
         # construct thumbnail and setting the max zoom-out level
@@ -101,7 +107,7 @@ class WSIWrapper:
         self.__update_position(dx, dy)  # getting where we wanna exactly zoom out
         self.get_view(self.position, self.level, self.patch_size)
 
-    def get_current_bird_view(self):
+    def get_current_bird_view(self, outline_color="red", rect_width=2):
         """
         Locating where the agent is in the thumbnail of the current slide.
         Will always take the self.current_view and return current_view denoted by a red rectangle on the thumbnail of the WSI.
@@ -143,8 +149,8 @@ class WSIWrapper:
                 x_thumb_level + w_thumb_level,
                 y_thumb_level + h_thumb_level,
             ],
-            outline="red",
-            width=1,
+            outline=outline_color,
+            width=rect_width,
         )
 
         # maybe only these two will be given to the agent, along side with the original thumbnail (self.thumbnail) no need to copy it

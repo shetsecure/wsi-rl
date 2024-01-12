@@ -1,0 +1,17 @@
+gym:
+  patch_size: [128, 128]
+  resize_thumbnail: [768, 768]
+  max_episode_steps: 1000
+
+train:
+  batch_size: 32
+  lr: 0.001
+  memory_size: 2_500
+  gamma: 0.9
+  eps_start: 1
+  eps_end: 0.01
+  eps_decay: 0.001
+  target_update: 10
+  
+  num_episodes: 5000
+  saving_update: 100
