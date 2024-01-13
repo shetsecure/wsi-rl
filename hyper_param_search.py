@@ -4,12 +4,13 @@ from itertools import product
 from pathlib import Path
 
 save_to_dir = Path("confs")
-start_from = 0
+how_many_files_to_generate = 10
+start_from = 20
 
 # gym params possible values
 accepted_patch_sizes = [64, 128]
 accepted_thumbnail_sizes = [256, 512, 768, False]
-accepted_max_eps_steps = [1_000, 2_000]
+accepted_max_eps_steps = [1_000]
 
 # Train params possible_values
 batch_size = [32, 64, 92, 128]

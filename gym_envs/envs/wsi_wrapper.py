@@ -26,7 +26,9 @@ class WSIWrapper:
         if isinstance(patch_size, int):
             patch_size = (patch_size, patch_size)
 
-        if isinstance(resize_thumbnail, int):
+        if not isinstance(resize_thumbnail, bool) and isinstance(
+            resize_thumbnail, (np.integer, int)
+        ):
             resize_thumbnail = (resize_thumbnail, resize_thumbnail)
 
         self.slide = openslide.open_slide(wsi_path)
@@ -82,7 +84,7 @@ class WSIWrapper:
         """
         if self.level == 0:
             # print("Already in the max magnification, can't zoom-in more. Returning")
-            return  # Not sure what would be the correct thing here, punish for trying to zoom in even tho we're at level 0 ?
+            return
 
         self.level = np.clip(self.level, 0, self.max_allowed_level - 1)
 
@@ -99,7 +101,7 @@ class WSIWrapper:
         """
         if self.level == self.max_allowed_level:
             # print("Already in the min magnification, can't zoom-out more. Returning")
-            return  # Not sure what would be the correct thing here, punish for trying to zoom in even tho we're at level 0 ?
+            return
 
         self.level = np.clip(self.level, 0, self.max_allowed_level - 1)
 
@@ -154,11 +156,20 @@ class WSIWrapper:
         )
 
         # maybe only these two will be given to the agent, along side with the original thumbnail (self.thumbnail) no need to copy it
-        # TODO: need to be adjusted after resize
         self.bird_position = (x_thumb_level, y_thumb_level)
         self.bird_view_size = (w_thumb_level, h_thumb_level)
 
         if self.resize_thumbnail:
+            print("dkhlna")
+            # calculate the scaling to map the rect info to the new size birdview
+            W, H = np.asarray(thumbnail).shape[:2]
+            S_W, S_H = self.resize_thumbnail
+            scale_x, scale_y = S_W / W, S_H / H
+
+            # update the coords
+            self.bird_position = (x_thumb_level * scale_x, y_thumb_level * scale_y)
+            self.bird_view_size = (w_thumb_level * scale_x, h_thumb_level * scale_y)
+
             thumbnail = thumbnail.resize(self.resize_thumbnail)
 
         # set the bird view
@@ -191,7 +202,6 @@ class WSIWrapper:
         self.position = (new_x, new_y)
 
     def __get_random_position_in_tissue(self, threshold=200):
-        # TODO: fix this one, bounding box isn't enough. Need to also ensure that at least 80% of the patch is tissue
         x, y, w, h = helpers.detect_tissue_thumbnail(self.thumbnail, threshold)
         downsample_factor = int(self.slide.level_downsamples[self.max_allowed_level])
 

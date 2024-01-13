@@ -167,3 +167,4 @@ runs/
 *.slurm
 *.ndpi
 *.pt
+hyper_param_search.py

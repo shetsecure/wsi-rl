@@ -93,7 +93,7 @@ def main(argv):
     target_net.eval()
     optimizer = optim.Adam(params=policy_net.parameters(), lr=training_params.lr)
 
-    writer = SummaryWriter()
+    writer = SummaryWriter(f"logs/{argv[1:]}")
 
     training_params_str = {
         f"training_params/{param_name}": param_value
@@ -185,6 +185,7 @@ def main(argv):
             print(f"Saving weights of the policy net")
             target_net.load_state_dict(policy_net.state_dict())
             MODEL_PATH = f"DQN_b{training_params.batch_size}_m{training_params.memory_size}_pS{patch_size}_thS{thumbnail_size}_target_net_{c_time}.pt"
+            writer.add_text("Weights_path", MODEL_PATH, 0)
             torch.save(target_net.state_dict(), MODEL_PATH)
 
     env.close()

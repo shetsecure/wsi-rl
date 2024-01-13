@@ -1,6 +1,8 @@
 import numpy as np
 import cv2
 
+from typing import Tuple
+
 
 def get_random_position(slide_dimensions):
     width, height = slide_dimensions
@@ -85,3 +87,45 @@ def get_tissue_percentage(img):
     surface = w * h
     percentage_tissue = len(np.where(mask == 1)[0]) / surface
     return percentage_tissue
+
+
+def binary_encoding(number, n_bits=4) -> list[int]:
+    # given a number, and n_bits sized array, return the binary representation of number
+    if number < 0 or number > 2**n_bits:
+        raise ValueError(
+            f"Can't encode {number} in a binary format using just {n_bits} bits"
+        )
+
+    binary_representation = format(number, f"0{n_bits}b")
+    return [int(bit) for bit in binary_representation]
+
+
+def map_coords_to_center_and_normalize(slide_dimensions, x, y) -> Tuple[float, float]:
+    # map the coords of the patch (x, y) of openslide to the central point of the WSI
+    # coords here will be in the range of [-1, 1]
+    width, height = slide_dimensions  # Level 0 dimensions
+    center_x, center_y = width / 2, height / 2
+
+    normalized_x = (x - center_x) / width
+    normalized_y = (y - center_y) / height
+
+    return normalized_x, normalized_y
+
+
+def map_rect_info(
+    thumbnail_shape: Tuple[int, int], x: int, y: int, width: int, height: int
+) -> Tuple[float, float, float, float]:
+    """
+    Given the rect that is drawn on the thumbnail that shows where the current view is in the WSI.
+    Get the mapped info: (normalized_x, normalized_y, percentage_width, percentage_height)
+    """
+
+    normalized_x, normalized_y = map_coords_to_center_and_normalize(
+        thumbnail_shape, x, y
+    )
+    percentage_width, percentage_height = (
+        width / thumbnail_shape[0],
+        height / thumbnail_shape[1],
+    )
+
+    return (normalized_x, normalized_y, percentage_width, percentage_height)
