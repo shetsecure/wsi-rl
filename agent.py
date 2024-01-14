@@ -18,9 +18,4 @@ class Agent:
             return torch.tensor([action]).to(self.device)
         else:
             with torch.no_grad():
-                return (
-                    policy_net(observation[0], observation[1])
-                    .argmax()
-                    .reshape(-1)
-                    .to(self.device)
-                )  # 7DI HNAYA .reshape(-1)
+                return policy_net(*observation).argmax().reshape(-1).to(self.device)

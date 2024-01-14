@@ -17,9 +17,9 @@ from . import helpers
 from PIL import ImageDraw
 
 
-class WSIWrapper:
+class WSIApi:
     """
-    A wrapper for an WSI that implements the controls.
+    An Api for an WSI that implements the controls.
     """
 
     def __init__(self, wsi_path, patch_size=(64, 64), resize_thumbnail=(512, 512)):
@@ -160,7 +160,6 @@ class WSIWrapper:
         self.bird_view_size = (w_thumb_level, h_thumb_level)
 
         if self.resize_thumbnail:
-            print("dkhlna")
             # calculate the scaling to map the rect info to the new size birdview
             W, H = np.asarray(thumbnail).shape[:2]
             S_W, S_H = self.resize_thumbnail

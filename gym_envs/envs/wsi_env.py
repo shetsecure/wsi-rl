@@ -5,7 +5,7 @@ import gymnasium as gym
 from gymnasium import spaces
 
 from . import helpers
-from .wsi_wrapper import WSIWrapper
+from .wsi_wrapper import WSIApi
 
 
 def pilImageToSurface(pilImage):
@@ -20,7 +20,7 @@ class WSIWorldEnv(gym.Env):
     def __init__(
         self, wsi_path, patch_size=(256, 256), resize_thumbnail=False, render_mode=None
     ):
-        self.wsi_wrapper = WSIWrapper(
+        self.wsi_wrapper = WSIApi(
             wsi_path, patch_size=patch_size, resize_thumbnail=resize_thumbnail
         )
         self.window_size = (

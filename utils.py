@@ -1,7 +1,7 @@
 import torch
 import random
 from collections import namedtuple
-from typing import NamedTuple, Union, Tuple
+from typing import NamedTuple, Union, Tuple, List
 
 
 class ReplayMemory:
@@ -48,11 +48,29 @@ class TrainingParams(NamedTuple):
 
 Experience = namedtuple(
     "Experience",
-    ("patches", "bird_views", "action", "next_patches", "next_bird_views", "reward"),
+    ("patch", "bird_view", "action", "next_patch", "next_bird_view", "reward"),
+)
+
+RichExperience = namedtuple(
+    "RichExperience",
+    (
+        "patch",
+        "bird_view",
+        "action",
+        "level",
+        "p_coord",
+        "b_rect",
+        "next_patch",
+        "next_bird_view",
+        "next_level",
+        "next_p_coord",
+        "next_b_rect",
+        "reward",
+    ),
 )
 
 
-def extract_tensors(experiences):
+def extract_tensors(experiences: List[Experience]):
     batch = Experience(*zip(*experiences))
 
     patches = torch.cat(batch.patches)  # torch.Size([B, 3, 256, 256])
@@ -65,3 +83,37 @@ def extract_tensors(experiences):
     next_bird_views = torch.cat(batch.next_bird_views)  # torch.Size([B, 3, 828, 1650])
 
     return (patches, bird_views, actions, rewards, next_patches, next_bird_views)
+
+
+def extract_rich_experiences_tensors(experiences: List[RichExperience]):
+    batch = RichExperience(*zip(*experiences))
+
+    patches = torch.cat(batch.patch)
+    bird_views = torch.cat(batch.bird_view)
+    levels = torch.cat(batch.level)
+    p_coords = torch.cat(batch.p_coord)
+    b_rects = torch.cat(batch.b_rect)
+
+    actions = torch.cat(batch.action)
+    rewards = torch.cat(batch.reward)
+
+    next_patches = torch.cat(batch.next_patch)
+    next_bird_views = torch.cat(batch.next_bird_view)
+    next_levels = torch.cat(batch.next_level)
+    next_p_coords = torch.cat(batch.next_p_coord)
+    next_b_rects = torch.cat(batch.next_b_rect)
+
+    return (
+        patches,
+        bird_views,
+        levels,
+        p_coords,
+        b_rects,
+        actions,
+        rewards,
+        next_patches,
+        next_bird_views,
+        next_levels,
+        next_p_coords,
+        next_b_rects,
+    )

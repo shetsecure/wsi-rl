@@ -23,11 +23,11 @@ import gymnasium as gym
 from gymnasium.wrappers import TransformReward, TransformObservation
 
 import utils
-from dqn import DQN, QValues
+from models import CNN_LSTM, QValues
 from agent import Agent
 from strategy import EpsilonGreedyStrategy
 
-device = torch.device("cuda")
+device = torch.device("cpu")
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 
@@ -50,13 +50,8 @@ parser.add_argument(
 c_time = datetime.datetime.now().strftime("%b_%d_%y %H:%M")
 
 
-def main(argv):
-    args = parser.parse_args(argv[1:])
-
-    config = yaml.load(open(Path(args.confpath)), Loader=yaml.SafeLoader)
-
+def create_env(config) -> gym.Env:
     gym_params = utils.GymParams(**config["gym"])
-    training_params = utils.TrainingParams(**config["train"])
 
     env = gym.make(
         "gym_envs/WSIWorldEnv-v1",
@@ -72,28 +67,26 @@ def main(argv):
     env = TransformObservation(
         env,
         lambda obs: (
-            transform(obs[0]).unsqueeze(0).to(device),
-            transform(obs[1]).unsqueeze(0).to(device),
+            transform(obs["current_view"]).unsqueeze(0).to(device),
+            transform(obs["birdeye_view"]).unsqueeze(0).to(device),
+            torch.tensor(obs["level"]).unsqueeze(0).to(device),
+            torch.tensor(obs["p_coords"]).unsqueeze(0).to(device),
+            torch.tensor(obs["b_rect"]).unsqueeze(0).to(device),
         ),
     )
 
+    return env
+
+
+def train(config, env: gym.Env):
+    gym_params = utils.GymParams(**config["gym"])
+    training_params = utils.TrainingParams(**config["train"])
     patch_size = env.unwrapped.wsi_wrapper.patch_size
     thumbnail_size = env.unwrapped.wsi_wrapper.thumbnail_size
     num_actions = env.action_space.n
 
-    strategy = EpsilonGreedyStrategy(
-        training_params.eps_start, training_params.eps_end, training_params.eps_decay
-    )
-    agent = Agent(strategy, num_actions, device)
-    memory = utils.ReplayMemory(training_params.memory_size)
-
-    policy_net = DQN(patch_size, thumbnail_size, num_actions).to(device)
-    target_net = DQN(patch_size, thumbnail_size, num_actions).to(device)
-    target_net.load_state_dict(policy_net.state_dict())
-    target_net.eval()
-    optimizer = optim.Adam(params=policy_net.parameters(), lr=training_params.lr)
-
-    writer = SummaryWriter(f"logs/{argv[1:]}")
+    MODEL_PATH = f"DQN_b{training_params.batch_size}_m{training_params.memory_size}_pS{patch_size}_thS{thumbnail_size}_target_net_{c_time}.pt"
+    writer = SummaryWriter(f"logs/{MODEL_PATH}")
 
     training_params_str = {
         f"training_params/{param_name}": param_value
@@ -103,10 +96,24 @@ def main(argv):
     writer.add_hparams(training_params_str, {})
     writer.add_text("gym_params", str(gym_params))
 
-    dummy_p = torch.randn(1, 3, patch_size[0], patch_size[1]).cuda()
-    dummy_b = torch.randn(1, 3, thumbnail_size[0], thumbnail_size[1]).cuda()
-    writer.add_graph(policy_net, (dummy_p, dummy_b))
-    del dummy_b, dummy_p
+    strategy = EpsilonGreedyStrategy(
+        training_params.eps_start, training_params.eps_end, training_params.eps_decay
+    )
+    agent = Agent(strategy, num_actions, device)
+    memory = utils.ReplayMemory(training_params.memory_size)
+
+    policy_net = CNN_LSTM(patch_size, thumbnail_size, num_actions)
+    target_net = CNN_LSTM(patch_size, thumbnail_size, num_actions)
+
+    dummy_inputs = policy_net.get_dummy_inputs()
+    writer.add_graph(policy_net, dummy_inputs)
+    for i in dummy_inputs:
+        del i
+
+    policy_net, target_net = policy_net.to(device), target_net.to(device)
+    target_net.load_state_dict(policy_net.state_dict())
+    target_net.eval()
+    optimizer = optim.Adam(params=policy_net.parameters(), lr=training_params.lr)
 
     for episode in range(training_params.num_episodes):
         observation, info = env.reset()
@@ -115,6 +122,7 @@ def main(argv):
 
         for timestep in (pbar := tqdm(count(), total=gym_params.max_episode_steps)):
             pbar.set_description(f"Currently in Ep: {episode}")
+            # current_view, birdeye_view, level, p_coords, b_rect
 
             action = agent.select_action(observation, policy_net)
             next_observation, reward, terminated, truncated, info = env.step(
@@ -122,12 +130,29 @@ def main(argv):
             )
             reward_per_episode += reward
 
-            patches, bird_views = observation
-            next_patches, next_bird_views = next_observation
+            patch, bird_view, level, p_coord, b_rect = observation
+            (
+                next_patch,
+                next_bird_view,
+                next_level,
+                next_p_coord,
+                next_b_rect,
+            ) = next_observation
 
             memory.push(
-                utils.Experience(
-                    patches, bird_views, action, next_patches, next_bird_views, reward
+                utils.RichExperience(
+                    patch,
+                    bird_view,
+                    action,
+                    level,
+                    p_coord,
+                    b_rect,
+                    next_patch,
+                    next_bird_view,
+                    next_level,
+                    next_p_coord,
+                    next_b_rect,
+                    reward,
                 )
             )
             observation = next_observation
@@ -137,16 +162,37 @@ def main(argv):
                 (
                     patches,
                     bird_views,
+                    levels,
+                    p_coords,
+                    b_rects,
                     actions,
                     rewards,
                     next_patches,
                     next_bird_views,
-                ) = utils.extract_tensors(experiences)
+                    next_levels,
+                    next_p_coords,
+                    next_b_rects,
+                ) = utils.extract_rich_experiences_tensors(experiences)
                 current_q_values = QValues.get_current(
-                    policy_net, patches, bird_views, actions
+                    policy_net,
+                    actions,
+                    (
+                        patches,
+                        bird_views,
+                        levels,
+                        p_coords,
+                        b_rects,
+                    ),
                 )
                 next_q_values = QValues.get_next(
-                    target_net, next_patches, next_bird_views
+                    target_net,
+                    (
+                        next_patches,
+                        next_bird_views,
+                        next_levels,
+                        next_p_coords,
+                        next_b_rects,
+                    ),
                 )
                 target_q_values = (next_q_values * training_params.gamma) + rewards
 
@@ -190,6 +236,17 @@ def main(argv):
 
     env.close()
     writer.flush()
+
+
+def main(argv):
+    args = parser.parse_args(argv[1:])
+    config = yaml.load(open(Path(args.confpath)), Loader=yaml.SafeLoader)
+
+    env = create_env(config)
+
+    train(config, env)
+
+    env.close()
 
 
 if __name__ == "__main__":
