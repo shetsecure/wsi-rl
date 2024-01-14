@@ -96,7 +96,7 @@ def train(config, env: gym.Env):
     num_actions = env.action_space.n
 
     MODEL_PATH = f"DQN_b{training_params.batch_size}_m{training_params.memory_size}_pS{patch_size}_thS{thumbnail_size}_target_net_{c_time}.pt"
-    writer = SummaryWriter(f"logs/{MODEL_PATH}")
+    writer = SummaryWriter(f"new_logs/{MODEL_PATH}")
 
     training_params_str = {
         f"training_params/{param_name}": param_value
@@ -157,18 +157,18 @@ def train(config, env: gym.Env):
 
             memory.push(
                 utils.RichExperience(
-                    patch,
-                    bird_view,
-                    action,
-                    level,
-                    p_coord,
-                    b_rect,
-                    next_patch,
-                    next_bird_view,
-                    next_level,
-                    next_p_coord,
-                    next_b_rect,
-                    reward,
+                    patch=patch,
+                    bird_view=bird_view,
+                    action=action,
+                    level=level,
+                    p_coord=p_coord,
+                    b_rect=b_rect,
+                    next_patch=next_patch,
+                    next_bird_view=next_bird_view,
+                    next_level=next_level,
+                    next_p_coord=next_p_coord,
+                    next_b_rect=next_b_rect,
+                    reward=reward,
                 )
             )
             observation = next_observation
@@ -224,11 +224,15 @@ def train(config, env: gym.Env):
                     print("Saving grads")
                     for name, param in policy_net.named_parameters():
                         if param.requires_grad and ("bias" not in name):
-                            writer.add_histogram(
-                                f"{name}.grad",
-                                param.grad.data.cpu().numpy(),
-                                global_step=episode,
-                            )
+                            try:
+                                writer.add_histogram(
+                                    f"{name}.grad",
+                                    param.grad.data.cpu().numpy(),
+                                    global_step=episode,
+                                )
+                            except AttributeError:
+                                # This happenes cuz of the compression layer since only one of the two is used
+                                continue
 
                 optimizer.step()
 

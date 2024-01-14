@@ -120,6 +120,7 @@ class CNN_LSTM(nn.Module):
         )
 
         # compression
+        # TODO: explore how to force these two to learn the same representation
         self.latent_space = nn.Sequential(
             nn.Linear(combined_features_size[0], 1024),
             nn.LeakyReLU(),
@@ -127,6 +128,15 @@ class CNN_LSTM(nn.Module):
             nn.Linear(1024, 128),
             nn.LeakyReLU(),
             nn.BatchNorm1d(128),
+        )
+
+        self.latent_space_no_bn = nn.Sequential(
+            nn.Linear(combined_features_size[0], 1024),
+            nn.LeakyReLU(),
+            nn.LayerNorm(1024),
+            nn.Linear(1024, 128),
+            nn.LeakyReLU(),
+            nn.LayerNorm(128),
         )
 
         self.attention = nn.Sequential(
@@ -168,7 +178,10 @@ class CNN_LSTM(nn.Module):
         )
 
         # Compression
-        latent_space_features = self.latent_space(combined_features)
+        if p_coords.shape[0] == 1:  # Batch size = 1
+            latent_space_features = self.latent_space_no_bn(combined_features)
+        else:
+            latent_space_features = self.latent_space(combined_features)
 
         # Apply attention
         attention_weights = self.attention(latent_space_features)

@@ -137,6 +137,7 @@ def simulate_run(env, training_params: TrainingParams, device="cuda"):
 
     If it pass, then probably it will continue training otherwise need to adjust the training_params
     """
+    print(device)
     try:
         patch_size = env.unwrapped.wsi_wrapper.patch_size
         thumbnail_size = env.unwrapped.wsi_wrapper.thumbnail_size
@@ -177,7 +178,7 @@ def simulate_run(env, training_params: TrainingParams, device="cuda"):
             pbar.set_description(
                 f"Loading dummy exp number: {i} || GPU MEM USED: {round(torch.cuda.memory_allocated() / 1e9, 2)}"
             )
-            action = torch.randint(low=0, high=num_actions, size=(1,))
+            action = torch.randint(low=0, high=num_actions, size=(1,)).to(device)
             reward = torch.randn(1).to(device)
             patch, bird_view, level, p_coord, b_rect = policy_net.get_dummy_inputs(
                 1, device=device
@@ -256,6 +257,9 @@ def simulate_run(env, training_params: TrainingParams, device="cuda"):
         loss.backward()
 
         print("Emptying the GPU memory, deleting everything")
+        for xp in memory.memory:
+            del xp
+
         del (
             policy_net,
             target_net,
@@ -277,6 +281,7 @@ def simulate_run(env, training_params: TrainingParams, device="cuda"):
         torch.cuda.empty_cache()
         gc.collect()
 
+        print(f"GPU MEM USED: {round(torch.cuda.memory_allocated() / 1e9, 2)}")
         print(f"GPU MEM USED: {round(torch.cuda.memory_allocated() / 1e9, 2)}")
 
         return True
