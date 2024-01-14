@@ -4,6 +4,8 @@
 from __future__ import annotations
 from itertools import count
 
+import os
+import gc
 import sys
 import yaml
 import argparse
@@ -26,8 +28,16 @@ import utils
 from models import CNN_LSTM, QValues
 from agent import Agent
 from strategy import EpsilonGreedyStrategy
+from debug_tools import plot_grad_flow
 
-device = torch.device("cpu")
+try:
+    if "lipade" in os.getlogin():
+        device = torch.device("cpu")
+    else:
+        device = torch.device("cuda")
+except OSError:
+    device = torch.device("cuda")
+
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 
@@ -70,8 +80,8 @@ def create_env(config) -> gym.Env:
             transform(obs["current_view"]).unsqueeze(0).to(device),
             transform(obs["birdeye_view"]).unsqueeze(0).to(device),
             torch.tensor(obs["level"]).unsqueeze(0).to(device),
-            torch.tensor(obs["p_coords"]).unsqueeze(0).to(device),
-            torch.tensor(obs["b_rect"]).unsqueeze(0).to(device),
+            torch.tensor(obs["p_coords"] * 100).unsqueeze(0).to(device),
+            torch.tensor(obs["b_rect"] * 100).unsqueeze(0).to(device),
         ),
     )
 
@@ -109,6 +119,8 @@ def train(config, env: gym.Env):
     writer.add_graph(policy_net, dummy_inputs)
     for i in dummy_inputs:
         del i
+    torch.cuda.empty_cache()
+    gc.collect()
 
     policy_net, target_net = policy_net.to(device), target_net.to(device)
     target_net.load_state_dict(policy_net.state_dict())
@@ -120,8 +132,12 @@ def train(config, env: gym.Env):
         loss_per_episode = 0
         reward_per_episode = 0
 
+        saved_grad_episode = False
+
         for timestep in (pbar := tqdm(count(), total=gym_params.max_episode_steps)):
-            pbar.set_description(f"Currently in Ep: {episode}")
+            pbar.set_description(
+                f"Currently in Ep: {episode} || GPU MEM USED: {round(torch.cuda.memory_allocated() / 1e9, 2)}"
+            )
             # current_view, birdeye_view, level, p_coords, b_rect
 
             action = agent.select_action(observation, policy_net)
@@ -197,32 +213,36 @@ def train(config, env: gym.Env):
                 target_q_values = (next_q_values * training_params.gamma) + rewards
 
                 loss = F.mse_loss(current_q_values, target_q_values.unsqueeze(1))
-                writer.add_scalar(f"Loss/ep{episode}_Timestep", loss, timestep)
+                # writer.add_scalar(f"Loss/ep{episode}_Timestep", loss, timestep)
 
                 optimizer.zero_grad()
                 loss.backward()
+                # plot_grad_flow(policy_net.named_parameters())
+
+                if episode % 100 == 0 and not saved_grad_episode:
+                    saved_grad_episode = True
+                    print("Saving grads")
+                    for name, param in policy_net.named_parameters():
+                        if param.requires_grad and ("bias" not in name):
+                            writer.add_histogram(
+                                f"{name}.grad",
+                                param.grad.data.cpu().numpy(),
+                                global_step=episode,
+                            )
+
                 optimizer.step()
 
                 loss_per_episode += loss.item()
 
             # TODO: Replace prints with loguru
 
-            if terminated:
-                print(f"Episode {episode} is terminated successfully")
-                writer.add_scalar("SuccessfullEpisodes/Duration", timestep, episode)
-                break
-
-            if truncated:
+            if terminated or truncated:
                 break
 
         writer.add_scalar("AllEpisodes/Duration", timestep, episode)
         writer.add_scalar("AllEpisodes/Reward", reward_per_episode, episode)
 
         writer.add_scalar("Loss/Episode", loss_per_episode, episode)
-
-        writer.add_scalar(
-            "GPU_MEM/Episode", round(torch.cuda.memory_allocated() / 1e9, 2), episode
-        )
 
         if episode % training_params.target_update == 0:
             target_net.load_state_dict(policy_net.state_dict())
@@ -244,7 +264,20 @@ def main(argv):
 
     env = create_env(config)
 
-    train(config, env)
+    # simulate first
+    training_params = utils.TrainingParams(**config["train"])
+    training_params_str = {
+        f"training_params/{param_name}": param_value
+        for param_name, param_value in training_params._asdict().items()
+    }
+    print(f"Testing if the following config can fit the memory first")
+    print(training_params_str)
+    can_run_xp = utils.simulate_run(env, training_params, device)
+
+    if can_run_xp:
+        train(config, env)
+    else:
+        print("Can't run xp. Can't fit the whole thing into memory")
 
     env.close()
 

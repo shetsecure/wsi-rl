@@ -68,10 +68,10 @@ class DualStreamCNN(nn.Module):
 
         return x
 
-    def get_dummy_inputs(self):
+    def get_dummy_inputs(self, batch_size=1, device="cpu"):
         # Only used to construct the graph with tensorboard
-        current_view = torch.randn(1, 3, *self.patch_size)
-        birdeye_view = torch.randn(1, 3, *self.thumbnail_size)
+        current_view = torch.randn(batch_size, 3, *self.patch_size).to(device)
+        birdeye_view = torch.randn(batch_size, 3, *self.thumbnail_size).to(device)
 
         return current_view, birdeye_view
 
@@ -99,9 +99,7 @@ class CNN_LSTM(nn.Module):
 
         # Fully connected layers for [level, p_coords, b_rect] total = 10
         self.additional_info_fc = nn.Sequential(
-            nn.Linear(
-                10, 64
-            ),  # Adjust the input size based on your input feature dimensions
+            nn.Linear(10, 32),
             nn.ReLU(),
             nn.Dropout(0.5),
         )
@@ -124,27 +122,31 @@ class CNN_LSTM(nn.Module):
         # compression
         self.latent_space = nn.Sequential(
             nn.Linear(combined_features_size[0], 1024),
-            nn.ReLU(),
-            nn.Linear(1024, 256),
-            nn.ReLU(),
+            nn.LeakyReLU(),
+            nn.BatchNorm1d(1024),
+            nn.Linear(1024, 128),
+            nn.LeakyReLU(),
+            nn.BatchNorm1d(128),
         )
 
         self.attention = nn.Sequential(
-            nn.Linear(256, 128),
-            nn.Tanh(),
-            nn.Linear(128, 256),
+            nn.Linear(128, 128), nn.Tanh(), nn.Linear(128, 128), nn.Softmax(dim=1)
         )
 
         # LSTM for temporal dynamics
         self.lstm = nn.LSTM(
-            input_size=256, hidden_size=128, num_layers=2, batch_first=True
+            input_size=128,
+            hidden_size=64,
+            num_layers=2,
+            batch_first=True,
+            dropout=0.5,
         )
 
         # Fully connected layer for action effect prediction
         self.action_effect_fc = nn.Sequential(
-            nn.Linear(128, 64),
+            nn.Linear(64, 32),
             nn.ReLU(),
-            nn.Linear(64, self.n_actions),  # Output size depends
+            nn.Linear(32, self.n_actions),  # Output size depends
         )
 
     def forward(self, current_view, birdeye_view, level, p_coords, b_rect):
@@ -169,25 +171,29 @@ class CNN_LSTM(nn.Module):
         latent_space_features = self.latent_space(combined_features)
 
         # Apply attention
-        attention_weights = F.softmax(self.attention(latent_space_features), dim=1)
+        attention_weights = self.attention(latent_space_features)
         attended_features = latent_space_features * attention_weights
 
         # Process through LSTM
-        lstm_out, _ = self.lstm(
-            attended_features.unsqueeze(0)
-        )  # Add batch dimension if necessary
+        lstm_out, _ = self.lstm(attended_features.unsqueeze(0))
 
         # Predict action effects
         action_effects = self.action_effect_fc(lstm_out.squeeze(0))
 
         return action_effects
 
-    def get_dummy_inputs(self):
+    def get_dummy_inputs(self, batch_size=1, device="cpu", requires_grad=True):
         # Only used to construct the graph with tensorboard
-        current_view = torch.randn(1, 3, *self.patch_size)
-        birdeye_view = torch.randn(1, 3, *self.thumbnail_size)
-        level = torch.tensor([[0, 0, 0, 0]], dtype=torch.float32)
-        p_coords = torch.tensor([[-0.106, 0.089]], dtype=torch.float32)
-        b_rect = torch.tensor([[0.284, -0.205, 0.0024, 0.0012]], dtype=torch.float32)
+        current_view = torch.randn(
+            batch_size, 3, *self.patch_size, requires_grad=requires_grad
+        ).to(device)
+        birdeye_view = torch.randn(
+            batch_size, 3, *self.thumbnail_size, requires_grad=requires_grad
+        ).to(device)
+        level = torch.tensor(
+            [[0] * 4] * batch_size, dtype=torch.float32, requires_grad=requires_grad
+        ).to(device)
+        p_coords = torch.randn(batch_size, 2, requires_grad=requires_grad).to(device)
+        b_rect = torch.randn(batch_size, 4, requires_grad=requires_grad).to(device)
 
         return current_view, birdeye_view, level, p_coords, b_rect

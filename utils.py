@@ -4,6 +4,17 @@ from collections import namedtuple
 from typing import NamedTuple, Union, Tuple, List
 
 
+import gc
+from tqdm import tqdm
+
+import torch
+import torch.optim as optim
+import torch.nn.functional as F
+
+from models import CNN_LSTM, QValues
+from strategy import EpsilonGreedyStrategy
+
+
 class ReplayMemory:
     def __init__(self, capacity):
         self.capacity = capacity
@@ -117,3 +128,158 @@ def extract_rich_experiences_tensors(experiences: List[RichExperience]):
         next_p_coords,
         next_b_rects,
     )
+
+
+def simulate_run(env, training_params: TrainingParams, device="cuda"):
+    """
+    Simulate the worse case scneario to see if the exp will run or will end up OOM.
+    Will just load dummy tensors and models and simulate it.
+
+    If it pass, then probably it will continue training otherwise need to adjust the training_params
+    """
+    try:
+        patch_size = env.unwrapped.wsi_wrapper.patch_size
+        thumbnail_size = env.unwrapped.wsi_wrapper.thumbnail_size
+        num_actions = env.action_space.n
+
+        print(f"GPU MEM USED: {round(torch.cuda.memory_allocated() / 1e9, 2)}")
+
+        batch_size = training_params.batch_size
+        memory_size = training_params.memory_size
+
+        # load the two models to memory
+        print("Loading the models")
+        policy_net = CNN_LSTM(patch_size, thumbnail_size, num_actions).to(device)
+        target_net = CNN_LSTM(patch_size, thumbnail_size, num_actions).to(device)
+
+        print(f"GPU MEM USED: {round(torch.cuda.memory_allocated() / 1e9, 2)}")
+
+        # load a batch to memory
+        print(f"Loading dummy batch inputs with size {batch_size} ")
+        batch = policy_net.get_dummy_inputs(batch_size, device=device)
+        print(f"GPU MEM USED: {round(torch.cuda.memory_allocated() / 1e9, 2)}")
+
+        # process it
+        print("Flow of inputs into networks")
+        out = policy_net(*batch)
+        with torch.no_grad():
+            out2 = target_net(*batch)
+
+        print(f"GPU MEM USED: {round(torch.cuda.memory_allocated() / 1e9, 2)}")
+
+        # load a dummy memory of experiences, batch_size * 2 cuz each xp have state_i and state_i+1
+        memory = ReplayMemory(training_params.memory_size)
+
+        print("Populating the memory bank with Experiences")
+
+        for i in (pbar := tqdm(range(memory_size))):
+            # load the actions and rewards that exists in memory
+            pbar.set_description(
+                f"Loading dummy exp number: {i} || GPU MEM USED: {round(torch.cuda.memory_allocated() / 1e9, 2)}"
+            )
+            action = torch.randint(low=0, high=num_actions, size=(1,))
+            reward = torch.randn(1).to(device)
+            patch, bird_view, level, p_coord, b_rect = policy_net.get_dummy_inputs(
+                1, device=device
+            )
+            (
+                next_patch,
+                next_bird_view,
+                next_level,
+                next_p_coord,
+                next_b_rect,
+            ) = policy_net.get_dummy_inputs(1, device=device)
+            memory.push(
+                RichExperience(
+                    patch,
+                    bird_view,
+                    action,
+                    level,
+                    p_coord,
+                    b_rect,
+                    next_patch,
+                    next_bird_view,
+                    next_level,
+                    next_p_coord,
+                    next_b_rect,
+                    reward,
+                )
+            )
+
+        # Loading optimizer and simulating a training loop
+        print("Loading optimizer and simulating a training loop")
+        target_net.load_state_dict(policy_net.state_dict())
+        target_net.eval()
+        optimizer = optim.Adam(params=policy_net.parameters(), lr=training_params.lr)
+
+        experiences = memory.sample(training_params.batch_size)
+        (
+            patches,
+            bird_views,
+            levels,
+            p_coords,
+            b_rects,
+            actions,
+            rewards,
+            next_patches,
+            next_bird_views,
+            next_levels,
+            next_p_coords,
+            next_b_rects,
+        ) = extract_rich_experiences_tensors(experiences)
+        current_q_values = QValues.get_current(
+            policy_net,
+            actions,
+            (
+                patches,
+                bird_views,
+                levels,
+                p_coords,
+                b_rects,
+            ),
+        )
+        next_q_values = QValues.get_next(
+            target_net,
+            (
+                next_patches,
+                next_bird_views,
+                next_levels,
+                next_p_coords,
+                next_b_rects,
+            ),
+        )
+        target_q_values = (next_q_values * training_params.gamma) + rewards
+
+        loss = F.mse_loss(current_q_values, target_q_values.unsqueeze(1))
+
+        optimizer.zero_grad()
+        loss.backward()
+
+        print("Emptying the GPU memory, deleting everything")
+        del (
+            policy_net,
+            target_net,
+            batch,
+            out,
+            out2,
+            memory,
+            actions,
+            rewards,
+            patches,
+            bird_views,
+            levels,
+            p_coords,
+            b_rect,
+            next_patches,
+        )
+        del next_bird_views, next_levels, next_p_coords, next_b_rect
+
+        torch.cuda.empty_cache()
+        gc.collect()
+
+        print(f"GPU MEM USED: {round(torch.cuda.memory_allocated() / 1e9, 2)}")
+
+        return True
+    except torch.cuda.OutOfMemoryError as e:
+        print(e)
+        return False
