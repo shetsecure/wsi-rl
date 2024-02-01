@@ -1,4 +1,3 @@
-from typing import Any
 import numpy as np
 import pandas as pd
 import pyglet
@@ -8,8 +7,6 @@ from gymnasium import spaces
 
 from . import helpers
 from .wsi_wrapper import WSIApi
-
-from tqdm import trange
 
 
 class WSIWorldEnv(gym.Env):
@@ -46,7 +43,7 @@ class WSIWorldEnv(gym.Env):
         4: "Zoom-in",
         5: "Zoom-out",
         6: "Crop",
-        7: "Stop",
+        # 7: "Stop",
     }
 
     def __init__(
@@ -111,7 +108,7 @@ class WSIWorldEnv(gym.Env):
             4: np.int8(-1),  # zoom in
             5: np.int8(1),  # zoom out
             6: True,  # Crop
-            7: True,  # Stop
+            # 7: True,  # Stop
         }
 
         if self.train_mode:
@@ -137,10 +134,12 @@ class WSIWorldEnv(gym.Env):
             self.clock = None
 
     def reset(self, seed=None, options: dict = None):
-        if seed is None:
-            seed = self.seed
+        if not self.train_mode:
+            if seed is None:
+                seed = self.seed
 
-        np.random.seed(seed)
+            np.random.seed(seed)
+
         super().reset(seed=seed, options=options)
 
         # We need to reset the attention scores and last visit time
@@ -151,6 +150,7 @@ class WSIWorldEnv(gym.Env):
             )
 
         # Reset the rest of the variables
+        seed = self.seed if not self.train_mode else None
         self.position = self._current_wsi.reset(seed=seed, options=options)
         self.patch_queue = helpers.PatchPriorityQueue(capacity=10)
         self.current_time = 0
@@ -160,7 +160,6 @@ class WSIWorldEnv(gym.Env):
 
         return observation, info
 
-    # self.current_time += 1
     def step(self, action: int):
         if not self.action_space.contains(action):
             raise ValueError(
@@ -240,13 +239,13 @@ class WSIWorldEnv(gym.Env):
             * np.exp(-self.step_decay_rate * self._current_wsi.level)
         )
 
-    def _get_reward(self, action: int = None):
+    def _get_reward(self, action: int = None, crop_base_reward=0.5):
         if action is not None:
             assert self.action_space.contains(action)
 
         if action == 7 and self.current_time < 20:
             # explore a lil bit before you end it
-            return -1e3
+            return -5.0
 
         if self.train_mode:
             # Reward will be the mean of the attention scores of the current view
@@ -259,6 +258,14 @@ class WSIWorldEnv(gym.Env):
                 y : y + dy * 2**self._current_wsi.level,
                 x : x + dx * 2**self._current_wsi.level,
             ].mean()
+
+            if action == 6:
+                # Crop action, reward will be between -2.5 and 2.5, instead of -1 and 1
+                attention_score_multiplier = 2.0
+                total_crop_reward = crop_base_reward + (
+                    mean_att_score * attention_score_multiplier
+                )
+                return total_crop_reward
 
             return mean_att_score
 

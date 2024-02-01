@@ -136,6 +136,7 @@ def map_rect_info(
     return (normalized_x, normalized_y, percentage_width, percentage_height)
 
 
+# TODO: Optimize code to make it faster (BIGGEST BOTTLENECK)
 def create_attention_score_map_l0(
     slide_path, hdf5_path, patch_size, normalize=True
 ) -> np.ndarray[np.float32]:
@@ -144,19 +145,20 @@ def create_attention_score_map_l0(
         slide_dim = slide.dimensions
 
         with h5py.File(hdf5_path, "r") as h5:
-            minimum_value = np.asarray(h5["attention_scores"]).min()
+            coords: np.ndarray = h5["coords"][:]
+            scores: np.ndarray = h5["attention_scores"][:]
+
+            minimum_value = scores.min()
             FILL_VALUE = minimum_value * 10  # probably for the background
 
             attention_scores = np.full(
                 slide_dim[::-1], FILL_VALUE, dtype=np.float32
             )  # Reverse dimensions
             print(
-                f"Creating an attention scores array of shape {slide_dim[::-1]} filled with {FILL_VALUE}"
+                f"Creating an attention scores array of shape {slide_dim[::-1]}, rest is filled with {FILL_VALUE}"
             )
 
-            coords = h5["coords"][:]
-            scores = h5["attention_scores"][:]
-            for i in range(len(coords)):
+            for i in trange(len(coords)):
                 x, y = coords[i]
                 score = scores[i]
                 try:
@@ -175,32 +177,24 @@ def create_attention_score_map_l0(
                 min_score = FILL_VALUE
                 max_score = scores.max()
 
-                attention_scores = (attention_scores - min_score) / (
-                    max_score - min_score
-                )
-                attention_scores = 2 * attention_scores - 1
+                normalize_scores(attention_scores, min_score, max_score)
 
-    # Optimize code to make it faster
-    attention_scores = attention_scores.astype(np.float32)
+            del coords, scores
 
     return attention_scores
 
 
-def normalize_scores(scores) -> np.ndarray[np.float32]:
-    # Ensure scores is a numpy array
-    scores = np.asarray(scores)
+def normalize_scores(scores, min_score=None, max_score=None) -> np.ndarray[np.float32]:
+    if min_score is None:
+        min_score = scores.min()
 
-    # Find the minimum and maximum values in the scores
-    min_score = np.min(scores)
-    max_score = np.max(scores)
+    if max_score is None:
+        max_score = scores.max()
 
-    # Normalize the scores to a 0-1 range
-    normalized_scores = (scores - min_score) / (max_score - min_score)
-
-    # Scale the normalized scores to a -1 to 1 range
-    normalized_scores = 2 * normalized_scores - 1
-
-    return normalized_scores
+    np.subtract(scores, min_score, out=scores)
+    np.divide(scores, max_score - min_score, out=scores)
+    np.multiply(scores, 2, out=scores)
+    np.subtract(scores, 1, out=scores)
 
 
 class PatchPriorityQueue:

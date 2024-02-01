@@ -19,10 +19,59 @@ from PIL import ImageDraw
 
 class WSIApi:
     """
-    An Api for an WSI that implements the controls.
+    An Api for a Whole Slide Image (WSI) that implements the controls.
+
+    Parameters:
+    - wsi_path (str): The path to the WSI file.
+    - patch_size (tuple[int]): The size of the patches to extract from the WSI. Defaults to (128,128).
+    - resize_thumbnail (tuple[int] or bool): The size to resize the thumbnail to. If set to True, the thumbnail will be resized to (512, 512). Defaults to (512, 512).
+    - threshold (int): The threshold value used for tissue detection. Defaults to 200.
+
+    Methods:
+    - render_current_info(with_bird_view=False): Renders the current position and view. If with_bird_view is True, it also shows the bird's eye view.
+    - get_view(position, level, patch_size): Gets the view at the specified position, level, and patch size.
+    - move(dx, dy): Moves the agent by dx and dy while staying in the same level.
+    - zoom_in(dx=0, dy=0): Zooms in gradually to the next magnification level. The optional dx and dy specify the position to zoom in.
+    - zoom_out(dx=0, dy=0): Zooms out gradually to the previous magnification level. The optional dx and dy specify the position to zoom out.
+    - get_current_bird_view(outline_color="red", rect_width=2): Gets the bird's eye view of the current view, with the agent's position denoted by a red rectangle.
+    - reset(seed=None, options=None): Resets the agent to a random position within the tissue area of the WSI.
+
+    Attributes:
+    - slide: The openslide object representing the WSI.
+    - thumbnail: The thumbnail image of the WSI.
+    - max_allowed_level: The maximum level of zoom-out.
+    - current_view: The current view of the WSI.
+    - position: The current position of the agent.
+    - level: The current zoom level.
+    - patch_size: The size of the patches.
+    - resize_thumbnail: The size to resize the thumbnail to.
+    - threshold: The threshold value used for tissue detection.
+    - maxx: The maximum x-coordinate of the tissue area.
+    - maxy: The maximum y-coordinate of the tissue area.
+    - mapped_x: The mapped x-coordinate of the tissue area.
+    - mapped_y: The mapped y-coordinate of the tissue area.
+    - bird_position: The position of the agent in the bird's eye view.
+    - bird_view_size: The size of the agent's view in the bird's eye view.
+    - current_bird_view: The current bird's eye view of the WSI.
+    - thumbnail_size: The size of the thumbnail image.
     """
 
-    def __init__(self, wsi_path, patch_size=(64, 64), resize_thumbnail=(512, 512)):
+    def __init__(
+        self,
+        wsi_path,
+        patch_size=(128, 128),
+        resize_thumbnail=(512, 512),
+        threshold=200,
+    ):
+        """
+        Initializes the WSIWrapper object.
+
+        Args:
+            wsi_path (str): The path to the Whole Slide Image (WSI) file.
+            patch_size (tuple, optional): The size of the patches to extract from the WSI. Defaults to (128, 128).
+            resize_thumbnail (tuple or bool, optional): The size to resize the thumbnail image to. If set to True, the thumbnail will not be resized. Defaults to (512, 512).
+            threshold (int, optional): The threshold value for tissue detection. Defaults to 200.
+        """
         if isinstance(patch_size, int):
             patch_size = (patch_size, patch_size)
 
@@ -34,13 +83,24 @@ class WSIApi:
         self.slide = openslide.open_slide(wsi_path)
 
         # construct thumbnail and setting the max zoom-out level
-        self.__get_best_level_for_thumbnail()
+        self.__get_best_level_for_thumbnail()  # This defines self.thumbnail and self.max_allowed_level
         self.current_view = None
 
         self.level = 0
         self.patch_size = patch_size
         self.resize_thumbnail = resize_thumbnail
+        self.threshold = threshold
+
         # set a random position in the WSI in tissue.
+        # helper variables to not calculate the same thing over and over again
+        x, y, w, h = helpers.detect_tissue_thumbnail(self.thumbnail, threshold)
+        downsample_factor = int(self.slide.level_downsamples[self.max_allowed_level])
+
+        self.mapped_x, self.mapped_y = x * downsample_factor, y * downsample_factor
+        mapped_w, mapped_h = w * downsample_factor, h * downsample_factor
+
+        self.maxx, self.maxy = self.mapped_x + mapped_w, self.mapped_y + mapped_h
+
         self.__get_random_position_in_tissue()
 
     def render_current_info(self, with_bird_view=False):
@@ -200,25 +260,29 @@ class WSIApi:
 
         self.position = (new_x, new_y)
 
-    def __get_random_position_in_tissue(self, threshold=200):
-        x, y, w, h = helpers.detect_tissue_thumbnail(self.thumbnail, threshold)
-        downsample_factor = int(self.slide.level_downsamples[self.max_allowed_level])
+    def __get_random_position_in_tissue(self, seed=None):
+        """
+        Returns a random position within the tissue region.
 
-        mapped_x, mapped_y = x * downsample_factor, y * downsample_factor
-        mapped_w, mapped_h = w * downsample_factor, h * downsample_factor
+        Args:
+            seed (int, optional): Seed value for reproducibility. Defaults to None.
 
-        maxx, maxy = mapped_x + mapped_w, mapped_y + mapped_h
+        Returns:
+            tuple: Random position within the tissue region.
+        """
+        if seed is not None:
+            np.random.seed(seed)
 
-        random_x = np.random.randint(mapped_x, maxx)
-        random_y = np.random.randint(mapped_y, maxy)
+        random_x = np.random.randint(self.mapped_x, self.maxx)
+        random_y = np.random.randint(self.mapped_y, self.maxy)
 
         position = (random_x, random_y)
         self.get_view(position, self.level, self.patch_size)
         percentage_tissue = helpers.get_tissue_percentage(self.current_view)
 
         while percentage_tissue < 0.5:
-            random_x = np.random.randint(mapped_x, maxx)
-            random_y = np.random.randint(mapped_y, maxy)
+            random_x = np.random.randint(self.mapped_x, self.maxx)
+            random_y = np.random.randint(self.mapped_y, self.maxy)
 
             position = (random_x, random_y)
             self.get_view(position, self.level, self.patch_size)
@@ -229,4 +293,4 @@ class WSIApi:
         return position
 
     def reset(self, seed=None, options=None):
-        return self.__get_random_position_in_tissue()
+        return self.__get_random_position_in_tissue(seed=seed)
