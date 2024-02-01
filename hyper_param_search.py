@@ -13,14 +13,14 @@ accepted_thumbnail_sizes = [512]
 accepted_max_eps_steps = [1_000]
 
 # Train params possible_values
-batch_size = [128, 256, 512]
+batch_size = [128, 256]
 gamma = [0.9]
 eps_start = [1]
 eps_end = [0.01]
 eps_decay = [0.001]
 target_update = [10]
-memory_size = [1_000, 1_500]
-lr = [1e-4]
+memory_size = [1_500, 2_500, 3_500, 4_500, 5_500, 9000]
+lr = [5e-3]
 num_episodes = [5000]
 saving_update = [100]
 
@@ -56,7 +56,7 @@ for i, combo in enumerate(all_combos):
     train_params = TrainingParams(*combo[3:])
 
     conf_name = (
-        f"c{i}_p_{gym_params.patch_size}_th_{gym_params.resize_thumbnail}"
+        f"GRU_c{i}"
         + f"_b{train_params.batch_size}_mem_{train_params.memory_size}"
         + f"_update_{train_params.target_update}.yaml"
     )

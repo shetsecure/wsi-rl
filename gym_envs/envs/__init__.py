@@ -1,1 +1,2 @@
-from .wsi_env import WSIWorldEnv
+from .wsi_env import WSIEnv
+from .env import WSIWorldEnv

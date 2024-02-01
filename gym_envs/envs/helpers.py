@@ -1,7 +1,12 @@
+import openslide
 import numpy as np
 import cv2
+import h5py
+import itertools
+import heapq
 
 from typing import Tuple
+from tqdm import trange
 
 
 def get_random_position(slide_dimensions):
@@ -129,3 +134,88 @@ def map_rect_info(
     )
 
     return (normalized_x, normalized_y, percentage_width, percentage_height)
+
+
+def create_attention_score_map_l0(
+    slide_path, hdf5_path, patch_size, normalize=True
+) -> np.ndarray[np.float32]:
+    with openslide.OpenSlide(slide_path) as slide:
+        dx, dy = patch_size
+        slide_dim = slide.dimensions
+
+        with h5py.File(hdf5_path, "r") as h5:
+            minimum_value = np.asarray(h5["attention_scores"]).min()
+            FILL_VALUE = minimum_value * 10  # probably for the background
+
+            attention_scores = np.full(
+                slide_dim[::-1], FILL_VALUE, dtype=np.float32
+            )  # Reverse dimensions
+            print(
+                f"Creating an attention scores array of shape {slide_dim[::-1]} filled with {FILL_VALUE}"
+            )
+
+            coords = h5["coords"][:]
+            scores = h5["attention_scores"][:]
+            for i in range(len(coords)):
+                x, y = coords[i]
+                score = scores[i]
+                try:
+                    if np.all(attention_scores[y : y + dy, x : x + dx] == FILL_VALUE):
+                        attention_scores[y : y + dy, x : x + dx] = score
+                    else:
+                        # Average the existing and new value
+                        attention_scores[y : y + dy, x : x + dx] = (
+                            attention_scores[y : y + dy, x : x + dx] + score
+                        ) / 2
+
+                except IndexError:
+                    print(f"IndexError at coordinates: {coords[i]}")
+
+            if normalize:
+                min_score = FILL_VALUE
+                max_score = scores.max()
+
+                attention_scores = (attention_scores - min_score) / (
+                    max_score - min_score
+                )
+                attention_scores = 2 * attention_scores - 1
+
+    # Optimize code to make it faster
+    attention_scores = attention_scores.astype(np.float32)
+
+    return attention_scores
+
+
+def normalize_scores(scores) -> np.ndarray[np.float32]:
+    # Ensure scores is a numpy array
+    scores = np.asarray(scores)
+
+    # Find the minimum and maximum values in the scores
+    min_score = np.min(scores)
+    max_score = np.max(scores)
+
+    # Normalize the scores to a 0-1 range
+    normalized_scores = (scores - min_score) / (max_score - min_score)
+
+    # Scale the normalized scores to a -1 to 1 range
+    normalized_scores = 2 * normalized_scores - 1
+
+    return normalized_scores
+
+
+class PatchPriorityQueue:
+    def __init__(self, capacity=10):
+        self.heap = []
+        self.capacity = capacity
+        self.counter = itertools.count()  # Tie-breaker counter
+
+    def add_patch_metadata(self, attention_score, patch_metadata):
+        # Use counter as a tie-breaker for equal scores
+        count = next(self.counter)
+        heapq.heappush(self.heap, (-attention_score, count, patch_metadata))
+
+        if len(self.heap) > self.capacity:
+            heapq.heappop(self.heap)
+
+    def get_patches(self):
+        return [data for score, count, data in sorted(self.heap, reverse=True)]

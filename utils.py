@@ -11,8 +11,11 @@ import torch
 import torch.optim as optim
 import torch.nn.functional as F
 
-from models import CNN_LSTM, QValues
-from strategy import EpsilonGreedyStrategy
+from models import *
+
+import matplotlib.pyplot as plt
+
+from gym_envs.envs.wsi_env import WSIEnv
 
 
 class ReplayMemory:
@@ -130,6 +133,13 @@ def extract_rich_experiences_tensors(experiences: List[RichExperience]):
     )
 
 
+def get_gpu_mem_info() -> str:
+    total_gb = round(torch.cuda.get_device_properties("cuda").total_memory / 1e9, 2)
+    used_gb = round(torch.cuda.memory_allocated() / 1e9, 2)
+
+    return f"GPU MEM USED: {used_gb} / {total_gb}"
+
+
 def simulate_run(env, training_params: TrainingParams, device="cuda"):
     """
     Simulate the worse case scneario to see if the exp will run or will end up OOM.
@@ -143,22 +153,24 @@ def simulate_run(env, training_params: TrainingParams, device="cuda"):
         thumbnail_size = env.unwrapped.wsi_wrapper.thumbnail_size
         num_actions = env.action_space.n
 
-        print(f"GPU MEM USED: {round(torch.cuda.memory_allocated() / 1e9, 2)}")
+        print(get_gpu_mem_info())
 
         batch_size = training_params.batch_size
         memory_size = training_params.memory_size
 
         # load the two models to memory
         print("Loading the models")
-        policy_net = CNN_LSTM(patch_size, thumbnail_size, num_actions).to(device)
-        target_net = CNN_LSTM(patch_size, thumbnail_size, num_actions).to(device)
+        policy_net = CNN_Attention(patch_size, thumbnail_size, num_actions).to(device)
+        target_net = CNN_Attention(patch_size, thumbnail_size, num_actions).to(device)
+        target_net.load_state_dict(policy_net.state_dict())
+        target_net.eval()
 
-        print(f"GPU MEM USED: {round(torch.cuda.memory_allocated() / 1e9, 2)}")
+        print(get_gpu_mem_info())
 
         # load a batch to memory
         print(f"Loading dummy batch inputs with size {batch_size} ")
         batch = policy_net.get_dummy_inputs(batch_size, device=device)
-        print(f"GPU MEM USED: {round(torch.cuda.memory_allocated() / 1e9, 2)}")
+        print(get_gpu_mem_info())
 
         # process it
         print("Flow of inputs into networks")
@@ -166,7 +178,7 @@ def simulate_run(env, training_params: TrainingParams, device="cuda"):
         with torch.no_grad():
             out2 = target_net(*batch)
 
-        print(f"GPU MEM USED: {round(torch.cuda.memory_allocated() / 1e9, 2)}")
+        print(get_gpu_mem_info())
 
         # load a dummy memory of experiences, batch_size * 2 cuz each xp have state_i and state_i+1
         memory = ReplayMemory(training_params.memory_size)
@@ -176,7 +188,7 @@ def simulate_run(env, training_params: TrainingParams, device="cuda"):
         for i in (pbar := tqdm(range(memory_size))):
             # load the actions and rewards that exists in memory
             pbar.set_description(
-                f"Loading dummy exp number: {i} || GPU MEM USED: {round(torch.cuda.memory_allocated() / 1e9, 2)}"
+                f"Loading dummy exp number: {i} || GPU MEM USED: {get_gpu_mem_info()}"
             )
             action = torch.randint(low=0, high=num_actions, size=(1,)).to(device)
             reward = torch.randn(1).to(device)
@@ -281,10 +293,27 @@ def simulate_run(env, training_params: TrainingParams, device="cuda"):
         torch.cuda.empty_cache()
         gc.collect()
 
-        print(f"GPU MEM USED: {round(torch.cuda.memory_allocated() / 1e9, 2)}")
-        print(f"GPU MEM USED: {round(torch.cuda.memory_allocated() / 1e9, 2)}")
+        print(get_gpu_mem_info())
+        print(get_gpu_mem_info())
 
         return True
     except torch.cuda.OutOfMemoryError as e:
         print(e)
         return False
+
+
+def log_actions_histogram(
+    writer, dictionary, step, tag, xticks=list(WSIEnv.action_to_name.values())
+):
+    x_values = list(dictionary.keys())
+    y_values = list(dictionary.values())
+
+    plt.bar(x_values, y_values)
+    plt.xlabel("Actions")
+    plt.ylabel("Count")
+    plt.title(tag)
+
+    plt.xticks(x_values, xticks, rotation=45)
+
+    writer.add_figure(tag, plt.gcf(), global_step=step)
+    plt.clf()

@@ -226,6 +226,7 @@ class WSIApi:
             percentage_tissue = helpers.get_tissue_percentage(self.current_view)
 
         print("Started in position: ", position)
+        return position
 
     def reset(self, seed=None, options=None):
-        self.__get_random_position_in_tissue()
+        return self.__get_random_position_in_tissue()

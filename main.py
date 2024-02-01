@@ -25,7 +25,7 @@ import gymnasium as gym
 from gymnasium.wrappers import TransformReward, TransformObservation
 
 import utils
-from models import CNN_LSTM, QValues
+from models import *
 from agent import Agent
 from strategy import EpsilonGreedyStrategy
 from debug_tools import plot_grad_flow
@@ -95,8 +95,13 @@ def train(config, env: gym.Env):
     thumbnail_size = env.unwrapped.wsi_wrapper.thumbnail_size
     num_actions = env.action_space.n
 
-    MODEL_PATH = f"DQN_b{training_params.batch_size}_m{training_params.memory_size}_pS{patch_size}_thS{thumbnail_size}_target_net_{c_time}.pt"
-    writer = SummaryWriter(f"new_logs/{MODEL_PATH}")
+    policy_net = GRU_CNN_Attention(patch_size, thumbnail_size, num_actions)
+    target_net = GRU_CNN_Attention(patch_size, thumbnail_size, num_actions)
+
+    model_name = str(policy_net.__class__).split(".")[-1].split("'")[0]
+    MODEL_PATH = f"{model_name}_b{training_params.batch_size}_m{training_params.memory_size}_pS{patch_size}_thS{thumbnail_size}_target_net_{c_time}.pt"
+
+    writer = SummaryWriter(f"logs_{model_name}/{MODEL_PATH}")
 
     training_params_str = {
         f"training_params/{param_name}": param_value
@@ -111,9 +116,6 @@ def train(config, env: gym.Env):
     )
     agent = Agent(strategy, num_actions, device)
     memory = utils.ReplayMemory(training_params.memory_size)
-
-    policy_net = CNN_LSTM(patch_size, thumbnail_size, num_actions)
-    target_net = CNN_LSTM(patch_size, thumbnail_size, num_actions)
 
     dummy_inputs = policy_net.get_dummy_inputs()
     writer.add_graph(policy_net, dummy_inputs)
@@ -133,14 +135,17 @@ def train(config, env: gym.Env):
         reward_per_episode = 0
 
         saved_grad_episode = False
+        actions_count = {a: c for a, c in zip(range(6), [0] * 6)}
 
         for timestep in (pbar := tqdm(count(), total=gym_params.max_episode_steps)):
             pbar.set_description(
-                f"Currently in Ep: {episode} || GPU MEM USED: {round(torch.cuda.memory_allocated() / 1e9, 2)}"
+                f"Currently in Ep: {episode} || {utils.get_gpu_mem_info()}"
             )
             # current_view, birdeye_view, level, p_coords, b_rect
 
             action = agent.select_action(observation, policy_net)
+            actions_count[int(action)] += 1
+
             next_observation, reward, terminated, truncated, info = env.step(
                 action.item()
             )
@@ -247,6 +252,10 @@ def train(config, env: gym.Env):
         writer.add_scalar("AllEpisodes/Reward", reward_per_episode, episode)
 
         writer.add_scalar("Loss/Episode", loss_per_episode, episode)
+        print(actions_count)
+        utils.log_actions_histogram(
+            writer, actions_count, episode, "actions_count_histogram"
+        )
 
         if episode % training_params.target_update == 0:
             target_net.load_state_dict(policy_net.state_dict())
@@ -254,7 +263,6 @@ def train(config, env: gym.Env):
         if episode % training_params.saving_update == 0:
             print(f"Saving weights of the policy net")
             target_net.load_state_dict(policy_net.state_dict())
-            MODEL_PATH = f"DQN_b{training_params.batch_size}_m{training_params.memory_size}_pS{patch_size}_thS{thumbnail_size}_target_net_{c_time}.pt"
             writer.add_text("Weights_path", MODEL_PATH, 0)
             torch.save(target_net.state_dict(), MODEL_PATH)
 
@@ -276,12 +284,16 @@ def main(argv):
     }
     print(f"Testing if the following config can fit the memory first")
     print(training_params_str)
-    can_run_xp = utils.simulate_run(env, training_params, device)
 
-    if can_run_xp:
-        train(config, env)
-    else:
-        print("Can't run xp. Can't fit the whole thing into memory")
+    # TODO: Fix bug here: We're overestimating too much.
+    # can_run_xp = utils.simulate_run(env, training_params, device)
+
+    # if can_run_xp:
+    #     train(config, env)
+    # else:
+    #     print("Can't run xp. Can't fit the whole thing into memory")
+
+    train(config, env)
 
     env.close()
 
