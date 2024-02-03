@@ -11,30 +11,6 @@ from .wsi_wrapper import WSIApi
 
 
 class WSIWorldEnv(gym.Env):
-    """
-    Gym environment for Whole Slide Image (WSI) world.
-
-    This environment simulates the navigation and exploration of a Whole Slide Image (WSI) dataset.
-    The agent can take actions to move in different directions, zoom in/out, crop the current view, or stop the exploration.
-    The environment provides observations of the current view, bird's eye view, level, patch coordinates, and rectangle information.
-    The agent receives rewards based on the attention scores of the current view.
-
-    Args:
-        dataset_path (str): Path to the dataset containing CSV file with WSI and HDF5 paths.
-        patch_size (tuple, optional): Size of the patch in pixels. Defaults to (128, 128).
-        decay_lambda (float, optional): Decay factor for spatial decay component. Defaults to 0.01.
-        decay_gamma (float, optional): Decay factor for time-based decay component. Defaults to 0.001.
-        resize_thumbnail (tuple, optional): Size of the thumbnail image. Defaults to (512, 512).
-        render_mode (str, optional): Rendering mode. Can be "human", "rgb_array", or None. Defaults to None.
-        train_mode (bool, optional): Training mode flag. If True, attention scores are used for rewards. Defaults to True.
-        seed (int, optional): Random seed. Defaults to 43.
-
-    Attributes:
-        metadata (dict): Metadata for the gym environment.
-        action_to_name (dict): Mapping of action index to action name.
-
-    """
-
     metadata = {"render_modes": ["human", "rgb_array", None], "render_fps": 5}
     action_to_name = {
         0: "Right",
@@ -51,7 +27,7 @@ class WSIWorldEnv(gym.Env):
         # print("Dataset path ", dataset_path)
         self.__init_args(config)
 
-        np.random.seed(self.seed)
+        # np.random.seed(self.seed)
 
         # dataset path contains csv file that have the wsi_path and hdf5_path for the attention scores
         self.dataset_csv = pd.read_csv(self.dataset_path)
@@ -59,6 +35,10 @@ class WSIWorldEnv(gym.Env):
         # TODO: Add random selection here afterwards
         wsi_path, hdf5_path = self.dataset_csv.iloc[0]
         self._current_wsi = WSIApi(wsi_path, self.patch_size, self.resize_thumbnail)
+
+        # Used in reward
+        width, height = self._current_wsi.slide.dimensions
+        self.max_possible_distance = np.sqrt(width**2 + height**2)
 
         # Defining the action and observation space
         self.action_space = spaces.Discrete(len(self.action_to_name))
@@ -73,7 +53,8 @@ class WSIWorldEnv(gym.Env):
                 "birdeye_view": spaces.Box(
                     low=0,
                     high=255,
-                    shape=(*self.resize_thumbnail, 3),
+                    # reverse it
+                    shape=(self.resize_thumbnail[1], self.resize_thumbnail[0], 3),
                     dtype=np.uint8,
                 ),
                 # current level where the patch was taken from, binary encoded
@@ -86,10 +67,14 @@ class WSIWorldEnv(gym.Env):
         )
 
         self._action_to_behavior = {
-            0: np.array([100, 0]),  # right
-            1: np.array([0, -100]),  # up ( cuz of openslide it's flipped )
-            2: np.array([-100, 0]),  # left
-            3: np.array([0, 100]),  # down ( cuz of openslide it's flipped )
+            0: np.array([self.base_step_size, 0]),  # right
+            1: np.array(
+                [0, -self.base_step_size]
+            ),  # up ( cuz of openslide it's flipped )
+            2: np.array([-self.base_step_size, 0]),  # left
+            3: np.array(
+                [0, self.base_step_size]
+            ),  # down ( cuz of openslide it's flipped )
             4: np.int8(-1),  # zoom in
             5: np.int8(1),  # zoom out
             6: True,  # Crop
@@ -98,16 +83,14 @@ class WSIWorldEnv(gym.Env):
 
         if self.train_mode:
             # Only in training mode we need the attention scores to calculate rewards.
-            self._attention_scores = helpers.create_attention_score_map_l0(
-                wsi_path, hdf5_path, self.patch_size, normalize=True
-            )
-            self._original_attention_scores = self._attention_scores.copy()
-            self._last_visit_time = np.zeros(
-                self._attention_scores.shape, dtype=np.uint8
-            )
+            (
+                self._predictive_coords,
+                self._predictive_coords_scores,
+            ) = helpers.get_most_predictive_patches_coords(hdf5_path)
+            self._original_coords_scores = self._predictive_coords_scores.copy()
         else:
-            self._attention_scores = None
-            self._last_visit_time = None
+            self.predictive_coords = None
+            self.predictive_coords_scores = None
 
         # Necessary to define these here, and a must to include them in reset()
         self.position = self._current_wsi.position
@@ -119,16 +102,13 @@ class WSIWorldEnv(gym.Env):
             if seed is None:
                 seed = self.seed
 
-            np.random.seed(seed)
+            # np.random.seed(seed)
 
         super().reset(seed=seed, options=options)
 
         # We need to reset the attention scores and last visit time
         if self.train_mode:
-            self._attention_scores = self._original_attention_scores.copy()
-            self._last_visit_time = np.zeros(
-                self._attention_scores.shape, dtype=np.uint8
-            )
+            self._predictive_coords_scores = self._original_coords_scores.copy()
 
         # Reset the rest of the variables
         seed = self.seed if not self.train_mode else None
@@ -157,10 +137,10 @@ class WSIWorldEnv(gym.Env):
 
             return observation, self._get_reward(action), done, truncated, info
 
-        # Update the attention scores
-        if self.train_mode:
-            # Also part of the reward shaping
-            self._update_attention_scores()
+        # # Update the attention scores
+        # if self.train_mode:
+        #     # Also part of the reward shaping
+        #     self._update_attention_scores()
 
         # reward can be None if we are in testing mode
         reward = self._get_reward(action)
@@ -197,6 +177,7 @@ class WSIWorldEnv(gym.Env):
 
         if isinstance(selected_action, np.ndarray):
             dx, dy = (selected_action // self.base_step_size) * self._get_step_size()
+
             self._current_wsi.move(dx, dy)
         else:
             if selected_action == -1:
@@ -227,6 +208,7 @@ class WSIWorldEnv(gym.Env):
             * np.exp(-self.step_decay_rate * self._current_wsi.level)
         )
 
+    # TODO: Add the decay with last visit time + maybe the spatial decay as well
     def _get_reward(self, action: int = None, crop_base_reward=0.5):
         if action is not None:
             assert self.action_space.contains(action)
@@ -236,60 +218,39 @@ class WSIWorldEnv(gym.Env):
             return -5.0
 
         if self.train_mode:
-            # Reward will be the mean of the attention scores of the current view
-            assert self._attention_scores is not None
+            # Reward will be -distance from the current position to the nearest predictive patch
+            assert self._predictive_coords is not None
+            assert self._predictive_coords_scores is not None
 
             x, y = self.position
             dx, dy = self.patch_size
 
-            mean_att_score = self._attention_scores[
-                y : y + dy * 2**self._current_wsi.level,
-                x : x + dx * 2**self._current_wsi.level,
-            ].mean()
+            # calculate the euclidean distance from the current position to the nearest predictive patch
+            min_distance = np.inf
+            # predictive_patch_index = None
+            for i, (px, py) in enumerate(self._predictive_coords):
+                distance = np.sqrt((x - px) ** 2 + (y - py) ** 2)
+                if distance < min_distance:
+                    min_distance = distance
+                    # predictive_patch_index = i
 
+            reward = -min_distance / self.max_possible_distance
+
+            """
             if action == 6:
-                # Crop action, reward will be between -2.5 and 2.5, instead of -1 and 1
+                # Crop action, reward will be between -2.5 and 0.5, instead of -1 and 0.5
+                # This can get the agent stuck to maximize the reward, we gonna get rid of it
+                # Instead, we will track the most visited patches and gather them after the episode is finished.
                 attention_score_multiplier = 2.0
                 total_crop_reward = crop_base_reward + (
-                    mean_att_score * attention_score_multiplier
+                    reward * attention_score_multiplier
                 )
                 return total_crop_reward
+            """
 
-            return mean_att_score
+            return reward
         else:
             return 1.0
-
-    # TODO: Add the spacial decay component & See if we can make it faster & momory efficient
-    def _update_attention_scores(self):
-        y, x = self.position
-        dy, dx = self.patch_size
-
-        update_area = (
-            slice(y, y + dy * 2**self._current_wsi.level),
-            slice(x, x + dx * 2**self._current_wsi.level),
-        )
-        time_elapsed = self.current_time - self._last_visit_time[update_area]
-        # e−λ×D(i,j,x,y) [Spatial Decay]
-        # self.attention_scores[update_area] *= np.exp(-self.decay_lambda * time_elapsed)
-        # −γ×ΔT [Time-Based Decay Component]
-        # self._attention_scores[update_area] -= self.decay_gamma * time_elapsed
-
-        # Trying to avoid more mem alloc
-        np.subtract(
-            self._attention_scores[update_area],
-            self.decay_gamma * time_elapsed,
-            out=self._attention_scores[update_area],
-        )
-
-        np.clip(
-            self._attention_scores[update_area],
-            -1,
-            1,
-            out=self._attention_scores[update_area],
-        )
-
-        # Update last update time for the area
-        self._last_visit_time[update_area] = self.current_time
 
     # TODO: Use wrappers instead to transform the observation
     def _get_obs(self):
@@ -372,8 +333,8 @@ class WSIWorldEnv(gym.Env):
         )
         render_mode = config["render_mode"] if "render_mode" in config else None
         train_mode = config["train_mode"] if "train_mode" in config else True
-        seed = config["seed"] if "seed" in config else 43
-        base_step_size = config["base_step_size"] if "base_step_size" in config else 128
+        seed = config["seed"] if "seed" in config else 24
+
         step_decay_rate = (
             config["step_decay_rate"] if "step_decay_rate" in config else 0.1
         )
@@ -390,7 +351,6 @@ class WSIWorldEnv(gym.Env):
         self.dataset_path = dataset_path
         self.decay_lambda = decay_lambda
         self.decay_gamma = decay_gamma
-        self.base_step_size = base_step_size
         self.step_decay_rate = step_decay_rate
         self.seed = seed
 
@@ -399,6 +359,13 @@ class WSIWorldEnv(gym.Env):
             if not isinstance(patch_size, tuple)
             else patch_size
         )
+
+        self.base_step_size = (
+            config["base_step_size"]
+            if "base_step_size" in config
+            else self.patch_size[0]
+        )
+
         self.resize_thumbnail = (
             (resize_thumbnail, resize_thumbnail)
             if not isinstance(resize_thumbnail, tuple)

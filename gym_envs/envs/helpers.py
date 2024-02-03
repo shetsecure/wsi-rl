@@ -45,7 +45,7 @@ def detect_tissue_thumbnail(thumbnail, threshold=200):
 
 def generate_tissue_mask(thumbnail, threshold=200):
     # Convert the thumbnail to a NumPy array
-    thumbnail_np = np.array(thumbnail)
+    thumbnail_np = np.array(thumbnail, copy=False)
 
     # Convert the image to grayscale
     grayscale_image = cv2.cvtColor(thumbnail_np, cv2.COLOR_RGB2GRAY)
@@ -182,6 +182,48 @@ def create_attention_score_map_l0(
             del coords, scores
 
     return attention_scores
+
+
+def get_most_predictive_patches_coords(
+    hdf5_path: str,
+    threshold: float = 0,
+    min_n_patches: int = 10,
+    max_n_patches: int = 30,
+    normalize: bool = True,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Retrieves the coordinates and scores of the most predictive patches from an HDF5 file.
+
+    Parameters:
+    - hdf5_path (str): The path to the HDF5 file.
+    - threshold (float): The minimum score threshold for a patch to be considered predictive. Default is 0.
+    - min_n_patches (int): The minimum number of patches to return. Default is 10.
+    - max_n_patches (int): The maximum number of patches to return. Default is 30.
+    - normalize (bool): Whether to normalize the scores. Default is True.
+
+    Returns:
+    - coords (np.ndarray): The coordinates of the most predictive patches.
+    - scores (np.ndarray): The scores of the most predictive patches.
+    """
+    with h5py.File(hdf5_path, "r") as h5:
+        coords = h5["coords"][:]
+        scores = h5["attention_scores"][:].reshape(-1)
+
+        # Get the indices of the patches that have a score higher than the threshold
+        indices = np.where(scores > threshold)[0]
+        if len(indices) < min_n_patches:
+            indices = np.argsort(scores)[-min_n_patches:]
+
+        if len(indices) > max_n_patches:
+            indices = np.argsort(scores)[-max_n_patches:]
+
+        selected_coords = coords[indices]
+        selected_scores = scores[indices]
+
+        if normalize:
+            np.divide(selected_scores, selected_scores.max(), out=selected_scores)
+
+        return selected_coords, selected_scores
 
 
 def normalize_scores(scores, min_score=None, max_score=None) -> np.ndarray[np.float32]:

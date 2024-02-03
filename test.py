@@ -25,7 +25,7 @@ model = PPO(
 )
 
 checkpoint_callback = CheckpointCallback(
-    save_freq=1e3, save_path="./ppo_wsiworld_checkpoints/"
+    save_freq=1e5, save_path="./ppo_wsiworld_checkpoints/"
 )
 
 model.learn(

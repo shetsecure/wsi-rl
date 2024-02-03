@@ -13,5 +13,10 @@ gym.register(
     id="WSIWorldEnv-v1",
     entry_point="gym_envs.envs:WSIWorldEnv",
     max_episode_steps=1000,
-    kwargs={"dataset_path": "/home/lipade/rl/dataset.csv"},
+)
+
+gym.register(
+    id="WSIWorldEnv-v2",
+    entry_point="gym_envs.envs:WSIWorldEnvV2",
+    max_episode_steps=300,
 )
